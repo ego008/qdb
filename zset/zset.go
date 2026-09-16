@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	ZSetDataPrefix  byte = 0x02 // Data: [Prefix][Name][Member] -> Score
-	ZSetIndexPrefix byte = 0x03 // Index: [Prefix][Name][Score][Member] -> Nil
+	ZSetDataPrefix  byte = 0x02 // Data: [Prefix][Name][Member] -> Score(8B Sortable)
+	ZSetIndexPrefix byte = 0x03 // Index: [Prefix][Name][Score(8B Sortable)][Member] -> Nil
 )
 
 type ZSetEngine struct {
@@ -26,7 +26,7 @@ func NewZSetEngine(be backend.Backend) *ZSetEngine {
 	}
 }
 
-func (z *ZSetEngine) ZSet(name string, member []byte, score uint64) error {
+func (z *ZSetEngine) ZSet(name string, member []byte, score float64) error {
 	z.locker.Lock(name)
 	defer z.locker.Unlock(name)
 
@@ -37,20 +37,17 @@ func (z *ZSetEngine) ZSet(name string, member []byte, score uint64) error {
 	defer batch.Close()
 
 	if err == nil && len(oldVal) == 8 {
-		oldScore := binary.BigEndian.Uint64(oldVal)
+		oldScore := encoding.DecodeSortableBytesToFloat64(oldVal)
 		if oldScore == score {
 			return nil
 		}
 
-		oldScoreBuf := make([]byte, 8)
-		binary.BigEndian.PutUint64(oldScoreBuf, oldScore)
+		oldScoreBuf := encoding.EncodeFloat64ToSortableBytes(oldScore)
 		oldIndexKey := encoding.EncodeKey(ZSetIndexPrefix, name, append(oldScoreBuf, member...))
 		batch.Delete(oldIndexKey)
 	}
 
-	newScoreBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(newScoreBuf, score)
-
+	newScoreBuf := encoding.EncodeFloat64ToSortableBytes(score)
 	batch.Put(dataKey, newScoreBuf)
 
 	newIndexKey := encoding.EncodeKey(ZSetIndexPrefix, name, append(newScoreBuf, member...))
@@ -59,7 +56,7 @@ func (z *ZSetEngine) ZSet(name string, member []byte, score uint64) error {
 	return batch.Commit()
 }
 
-func (z *ZSetEngine) ZGet(name string, member []byte) (uint64, error) {
+func (z *ZSetEngine) ZGet(name string, member []byte) (float64, error) {
 	z.locker.RLock(name)
 	defer z.locker.RUnlock(name)
 
@@ -68,17 +65,100 @@ func (z *ZSetEngine) ZGet(name string, member []byte) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return binary.BigEndian.Uint64(val), nil
+	return encoding.DecodeSortableBytesToFloat64(val), nil
 }
 
-func (z *ZSetEngine) ZScan(name string, memberStart []byte, scoreStart uint64, limit int) ([]interface{}, error) {
+func (z *ZSetEngine) ZRem(name string, member []byte) (bool, error) {
+	z.locker.Lock(name)
+	defer z.locker.Unlock(name)
+
+	dataKey := encoding.EncodeKey(ZSetDataPrefix, name, member)
+	val, err := z.be.Get(dataKey)
+	if err != nil {
+		return false, nil
+	}
+
+	batch := z.be.NewBatch()
+	defer batch.Close()
+
+	batch.Delete(dataKey)
+
+	indexKey := encoding.EncodeKey(ZSetIndexPrefix, name, append(val, member...))
+	batch.Delete(indexKey)
+
+	err = batch.Commit()
+	return err == nil, err
+}
+
+func (z *ZSetEngine) ZRank(name string, member []byte) (int64, error) {
+	z.locker.RLock(name)
+	defer z.locker.RUnlock(name)
+
+	targetScore, err := z.ZGet(name, member)
+	if err != nil {
+		return -1, err
+	}
+
+	prefix := encoding.EncodePrefix(ZSetIndexPrefix, name)
+	iter := z.be.NewIterator(prefix)
+	defer iter.Close()
+
+	var rank int64 = 0
+	targetScoreBuf := encoding.EncodeFloat64ToSortableBytes(targetScore)
+	targetIndexKey := encoding.EncodeKey(ZSetIndexPrefix, name, append(targetScoreBuf, member...))
+
+	for ok := iter.Seek(prefix); ok; ok = iter.Next() {
+		currKey := iter.Key()
+		if !bytes.HasPrefix(currKey, prefix) {
+			break
+		}
+		if bytes.Equal(currKey, targetIndexKey) {
+			return rank, nil
+		}
+		rank++
+	}
+	return -1, nil
+}
+
+func (z *ZSetEngine) ZCount(name string, minScore, maxScore float64) (int64, error) {
+	z.locker.RLock(name)
+	defer z.locker.RUnlock(name)
+
+	prefix := encoding.EncodePrefix(ZSetIndexPrefix, name)
+	minBuf := encoding.EncodeFloat64ToSortableBytes(minScore)
+	startKey := encoding.EncodeKey(ZSetIndexPrefix, name, minBuf)
+
+	iter := z.be.NewIterator(prefix)
+	defer iter.Close()
+
+	var count int64 = 0
+	for ok := iter.Seek(startKey); ok; ok = iter.Next() {
+		currKey := iter.Key()
+		if !bytes.HasPrefix(currKey, prefix) {
+			break
+		}
+
+		payload := extractIndexPayload(currKey, name)
+		if len(payload) < 8 {
+			continue
+		}
+
+		score := encoding.DecodeSortableBytesToFloat64(payload[:8])
+		if score > maxScore {
+			break
+		}
+		count++
+	}
+	return count, iter.Error()
+}
+
+func (z *ZSetEngine) ZScan(name string, memberStart []byte, scoreStart float64, limit int) ([]interface{}, error) {
 	z.locker.RLock(name)
 	defer z.locker.RUnlock(name)
 
 	prefix := encoding.EncodePrefix(ZSetIndexPrefix, name)
 
-	scoreBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(scoreBuf, scoreStart)
+	scoreBuf := encoding.EncodeFloat64ToSortableBytes(scoreStart)
 	startPayload := append(scoreBuf, memberStart...)
 	targetStart := encoding.EncodeKey(ZSetIndexPrefix, name, startPayload)
 
@@ -99,13 +179,12 @@ func (z *ZSetEngine) ZScan(name string, memberStart []byte, scoreStart uint64, l
 			continue
 		}
 
-		// 精确截取剥离了 Name 之后的部分：[Score(8B) + Member]
 		payload := extractIndexPayload(currKey, name)
 		if len(payload) < 8 {
 			continue
 		}
 
-		score := binary.BigEndian.Uint64(payload[:8])
+		score := encoding.DecodeSortableBytesToFloat64(payload[:8])
 		member := append([]byte(nil), payload[8:]...)
 
 		result = append(result, string(member), score)
@@ -119,7 +198,7 @@ func (z *ZSetEngine) ZScan(name string, memberStart []byte, scoreStart uint64, l
 	return result, iter.Error()
 }
 
-func (z *ZSetEngine) ZRScan(name string, memberStart []byte, scoreStart uint64, limit int) ([]interface{}, error) {
+func (z *ZSetEngine) ZRScan(name string, memberStart []byte, scoreStart float64, limit int) ([]interface{}, error) {
 	z.locker.RLock(name)
 	defer z.locker.RUnlock(name)
 
@@ -131,9 +210,8 @@ func (z *ZSetEngine) ZRScan(name string, memberStart []byte, scoreStart uint64, 
 	count := 0
 
 	var ok bool
-	if len(memberStart) > 0 || scoreStart > 0 {
-		scoreBuf := make([]byte, 8)
-		binary.BigEndian.PutUint64(scoreBuf, scoreStart)
+	if len(memberStart) > 0 || scoreStart != 0 {
+		scoreBuf := encoding.EncodeFloat64ToSortableBytes(scoreStart)
 		startPayload := append(scoreBuf, memberStart...)
 		targetStart := encoding.EncodeKey(ZSetIndexPrefix, name, startPayload)
 
@@ -159,7 +237,7 @@ func (z *ZSetEngine) ZRScan(name string, memberStart []byte, scoreStart uint64, 
 			continue
 		}
 
-		score := binary.BigEndian.Uint64(payload[:8])
+		score := encoding.DecodeSortableBytesToFloat64(payload[:8])
 		member := append([]byte(nil), payload[8:]...)
 
 		result = append(result, string(member), score)
@@ -173,9 +251,7 @@ func (z *ZSetEngine) ZRScan(name string, memberStart []byte, scoreStart uint64, 
 	return result, iter.Error()
 }
 
-// 辅助函数：安全计算并剥离 Header 前缀，获取 [Score(8B) + Member] Payload
 func extractIndexPayload(encoded []byte, name string) []byte {
-	// 格式: 1B(Prefix) + Varint(NameLen) + Name + Score(8B) + Member
 	_, n := binary.Uvarint(encoded[1:])
 	headerLen := 1 + n + len(name)
 	return encoded[headerLen:]

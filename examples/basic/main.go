@@ -28,7 +28,7 @@ func main() {
 	_ = db.ZSet("leaderboard", []byte("player_2"), 250)
 
 	score, _ := db.ZGet("leaderboard", []byte("player_2"))
-	fmt.Printf("ZGet player_2 score: %d\n", score)
+	fmt.Printf("ZGet player_2 score: %f\n", score)
 
 	zScanRes, _ := db.ZRScan("leaderboard", []byte(""), 300, 10)
 	fmt.Printf("ZRScan result items: %d\n", len(zScanRes)/2)

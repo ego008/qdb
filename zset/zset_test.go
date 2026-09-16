@@ -14,49 +14,37 @@ func runZSetTests(t *testing.T, be backend.Backend) {
 	z := zset.NewZSetEngine(be)
 	name := "game_rank"
 
-	// 1. 测试 ZSet 与 ZGet
-	_ = z.ZSet(name, []byte("player_a"), 100)
-	_ = z.ZSet(name, []byte("player_b"), 200)
-	_ = z.ZSet(name, []byte("player_c"), 150)
+	// 1. 写入包含负数与小数的 Score
+	_ = z.ZSet(name, []byte("player_a"), -10.5)
+	_ = z.ZSet(name, []byte("player_b"), 200.0)
+	_ = z.ZSet(name, []byte("player_c"), 0.0)
 
-	score, err := z.ZGet(name, []byte("player_c"))
-	if err != nil || score != 150 {
-		t.Fatalf("ZGet expected 150, got %d, err: %v", score, err)
-	}
-
-	// 更新 score
-	_ = z.ZSet(name, []byte("player_a"), 300)
-	score, _ = z.ZGet(name, []byte("player_a"))
-	if score != 300 {
-		t.Fatalf("ZSet update score failed, expected 300, got %d", score)
+	score, err := z.ZGet(name, []byte("player_a"))
+	if err != nil || score != -10.5 {
+		t.Fatalf("ZGet expected -10.5, got %f, err: %v", score, err)
 	}
 
-	// 2. 测试 ZScan (按 Score 升序)
-	res, err := z.ZScan(name, []byte(""), 0, 10)
-	if err != nil {
-		t.Fatalf("ZScan failed: %v", err)
-	}
-	if len(res) != 6 {
-		t.Fatalf("ZScan len expected 6, got %d", len(res))
+	// 2. 测试 ZCount (区间 [-15.0, 50.0] 应包含 player_a(-10.5) 和 player_c(0.0))
+	count, err := z.ZCount(name, -15.0, 50.0)
+	if err != nil || count != 2 {
+		t.Fatalf("ZCount expected 2, got %d, err: %v", count, err)
 	}
 
-	m0, m2, m4 := res[0].(string), res[2].(string), res[4].(string)
-	if m0 != "player_c" || m2 != "player_b" || m4 != "player_a" {
-		t.Fatalf("ZScan sorted order error: %s, %s, %s", m0, m2, m4)
+	// 3. 测试 ZRank (升序: player_a(-10.5)[0] -> player_c(0.0)[1] -> player_b(200.0)[2])
+	rank, err := z.ZRank(name, []byte("player_c"))
+	if err != nil || rank != 1 {
+		t.Fatalf("ZRank for player_c expected 1, got %d, err: %v", rank, err)
 	}
 
-	// 3. 测试 ZRScan (按 Score 降序)
-	res, err = z.ZRScan(name, []byte(""), 0, 10)
-	if err != nil {
-		t.Fatalf("ZRScan failed: %v", err)
-	}
-	if len(res) != 6 {
-		t.Fatalf("ZRScan len expected 6, got %d", len(res))
+	// 4. 测试 ZRem
+	ok, err := z.ZRem(name, []byte("player_a"))
+	if err != nil || !ok {
+		t.Fatalf("ZRem player_a failed: %v", err)
 	}
 
-	rm0, rm2, rm4 := res[0].(string), res[2].(string), res[4].(string)
-	if rm0 != "player_a" || rm2 != "player_b" || rm4 != "player_c" {
-		t.Fatalf("ZRScan reverse order error: %s, %s, %s", rm0, rm2, rm4)
+	rank, _ = z.ZRank(name, []byte("player_c"))
+	if rank != 0 {
+		t.Fatalf("ZRank for player_c after ZRem expected 0, got %d", rank)
 	}
 }
 

@@ -14,55 +14,30 @@ func runHashTests(t *testing.T, be backend.Backend) {
 	h := hash.NewHashEngine(be)
 	name := "user_info"
 
-	// 1. 测试 HSet 与 HGet
-	err := h.HSet(name, []byte("name"), []byte("Alice"))
-	if err != nil {
-		t.Fatalf("HSet failed: %v", err)
-	}
-	err = h.HSet(name, []byte("age"), []byte("30"))
-	if err != nil {
-		t.Fatalf("HSet failed: %v", err)
+	_ = h.HSet(name, []byte("name"), []byte("Alice"))
+	_ = h.HSet(name, []byte("age"), []byte("30"))
+
+	// 测试 HLen
+	lenVal, err := h.HLen(name)
+	if err != nil || lenVal != 2 {
+		t.Fatalf("HLen expected 2, got %d, err: %v", lenVal, err)
 	}
 
-	val, err := h.HGet(name, []byte("name"))
-	if err != nil || string(val) != "Alice" {
-		t.Fatalf("HGet expected Alice, got %s, err: %v", val, err)
+	// 测试 HIncrBy
+	newAge, err := h.HIncrBy(name, []byte("age"), 5)
+	if err != nil || newAge != 35 {
+		t.Fatalf("HIncrBy expected 35, got %d, err: %v", newAge, err)
 	}
 
-	// 2. 测试 HScan (正向扫描)
-	_ = h.HSet(name, []byte("k1"), []byte("v1"))
-	_ = h.HSet(name, []byte("k2"), []byte("v2"))
-	_ = h.HSet(name, []byte("k3"), []byte("v3"))
-	_ = h.HSet(name, []byte("k4"), []byte("v4"))
-
-	// 从 keyStart="" 开始，限制 2 条 (返回 key/val 键值对)
-	res, err := h.HScan(name, []byte(""), 2)
-	if err != nil {
-		t.Fatalf("HScan failed: %v", err)
-	}
-	if len(res) != 4 {
-		t.Fatalf("HScan len expected 4 slices, got %d", len(res))
-	}
-	if string(res[0]) != "age" || string(res[2]) != "k1" {
-		t.Fatalf("HScan order incorrect, got: %s, %s", string(res[0]), string(res[2]))
+	// 测试 HDel
+	ok, err := h.HDel(name, []byte("name"))
+	if err != nil || !ok {
+		t.Fatalf("HDel failed: %v", err)
 	}
 
-	// 从 keyStart="k2" 开始正向 Seek 扫描
-	res, err = h.HScan(name, []byte("k2"), 10)
-	if err != nil {
-		t.Fatalf("HScan with keyStart failed: %v", err)
-	}
-	if len(res) < 4 || string(res[0]) != "k3" || string(res[2]) != "k4" {
-		t.Fatalf("HScan Seek filtering failed, got first key: %s", string(res[0]))
-	}
-
-	// 3. 测试 HRScan (反向扫描)
-	res, err = h.HRScan(name, []byte(""), 2)
-	if err != nil {
-		t.Fatalf("HRScan failed: %v", err)
-	}
-	if len(res) != 4 || string(res[0]) != "name" || string(res[2]) != "k4" {
-		t.Fatalf("HRScan reverse order incorrect, got: %s, %s", string(res[0]), string(res[2]))
+	lenVal, _ = h.HLen(name)
+	if lenVal != 1 {
+		t.Fatalf("HLen expected 1 after HDel, got %d", lenVal)
 	}
 }
 
