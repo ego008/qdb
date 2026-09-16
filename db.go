@@ -48,7 +48,6 @@ func Open(engine EngineType, path string) (*DB, error) {
 		zset: zset.NewZSetEngine(be),
 	}
 
-	// 注册 TTL 到期自动清理回调
 	db.ttl = ttl.NewTTLEngine(func(key string) {
 		_ = be.Delete([]byte(key))
 	})
@@ -61,7 +60,7 @@ func (db *DB) Close() error {
 	return db.be.Close()
 }
 
-// TTL API
+// TTL 模块
 func (db *DB) Expire(key string, ttl time.Duration) {
 	db.ttl.SetTTL(key, ttl)
 }
@@ -70,7 +69,7 @@ func (db *DB) IsExpired(key string) bool {
 	return db.ttl.IsExpired(key)
 }
 
-// 备份 API
+// 快照备份与恢复
 func (db *DB) DumpSnapshot(w io.Writer) error {
 	return backup.ExportSnapshot(db.be, w)
 }
@@ -87,7 +86,7 @@ func (db *DB) LoadFromFile(filepath string) error {
 	return backup.ImportFromFile(db.be, filepath)
 }
 
-// Hash API
+// Hash 模块 API
 func (db *DB) HSet(name string, key, value []byte) error    { return db.hash.HSet(name, key, value) }
 func (db *DB) HGet(name string, key []byte) ([]byte, error) { return db.hash.HGet(name, key) }
 func (db *DB) HDel(name string, key []byte) (bool, error)   { return db.hash.HDel(name, key) }
@@ -102,7 +101,7 @@ func (db *DB) HRScan(name string, keyStart []byte, limit int) ([][]byte, error) 
 	return db.hash.HRScan(name, keyStart, limit)
 }
 
-// ZSet API
+// ZSet 模块 API
 func (db *DB) ZSet(name string, member []byte, score float64) error {
 	return db.zset.ZSet(name, member, score)
 }
