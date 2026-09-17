@@ -2,6 +2,8 @@ package qdb_test
 
 import (
 	"bytes"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -74,5 +76,43 @@ func TestDB_LongTerm_Features(t *testing.T) {
 				t.Fatalf("Restored ZSet score mismatch, expected 99.5, got %f", score)
 			}
 		})
+	}
+}
+
+func TestDB_Compact(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "compact_test.db")
+	compactedPath := filepath.Join(dir, "compacted.db")
+
+	db, err := qdb.Open(qdb.EngineBBolt, dbPath)
+	if err != nil {
+		t.Fatalf("Open DB failed: %v", err)
+	}
+	defer db.Close()
+
+	// 1. 写入大量临时数据产生碎片
+	for i := 0; i < 1000; i++ {
+		_ = db.HSet("big_hash", []byte(fmt.Sprintf("k_%d", i)), []byte("some_large_dummy_value_data_payload"))
+	}
+
+	// 2. 彻底清空所有数据（产生大量闲置页 / 碎片）
+	for i := 0; i < 1000; i++ {
+		_, _ = db.HDel("big_hash", []byte(fmt.Sprintf("k_%d", i)))
+	}
+
+	// 3. 执行物理压缩整理
+	err = db.CompactTo(compactedPath)
+	if err != nil {
+		t.Fatalf("CompactTo failed: %v", err)
+	}
+
+	// 4. 断言压缩后的文件明显小于原文件
+	origInfo, _ := os.Stat(dbPath)
+	compactInfo, _ := os.Stat(compactedPath)
+
+	t.Logf("Original DB size: %d bytes, Compacted size: %d bytes", origInfo.Size(), compactInfo.Size())
+
+	if compactInfo.Size() >= origInfo.Size() {
+		t.Fatalf("Compacted file size (%d) should be smaller than original (%d)", compactInfo.Size(), origInfo.Size())
 	}
 }

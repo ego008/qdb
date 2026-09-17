@@ -60,6 +60,11 @@ func (db *DB) Close() error {
 	return db.be.Close()
 }
 
+// CompactTo 将当前数据库压缩整理，另存为紧凑无碎片的数据库文件 dstPath
+func (db *DB) CompactTo(dstPath string) error {
+	return db.be.Compact(dstPath)
+}
+
 // TTL 模块
 func (db *DB) Expire(key string, ttl time.Duration) {
 	db.ttl.SetTTL(key, ttl)

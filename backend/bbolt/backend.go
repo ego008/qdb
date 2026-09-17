@@ -55,6 +55,17 @@ func (b *BBoltBackend) Delete(key []byte) error {
 	})
 }
 
+func (b *BBoltBackend) Compact(dstPath string) error {
+	// 创建并压缩整理到目标文件 dstPath
+	dstDB, err := go_bbolt.Open(dstPath, 0600, nil)
+	if err != nil {
+		return err
+	}
+	defer dstDB.Close()
+
+	return go_bbolt.Compact(dstDB, b.db, 0)
+}
+
 func (b *BBoltBackend) NewBatch() backend.Batch {
 	tx, _ := b.db.Begin(true)
 	return &bboltBatch{tx: tx, bkt: tx.Bucket(bucketName)}

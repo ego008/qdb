@@ -43,6 +43,13 @@ func (p *PebbleBackend) Delete(key []byte) error {
 	return p.db.Delete(key, cockroach_pebble.Sync)
 }
 
+func (p *PebbleBackend) Compact(dstPath string) error {
+	// Pebble 强制合并全量 Range LSM-Tree SST 页面
+	start := []byte{0x00}
+	end := []byte{0xff}
+	return p.db.Compact(start, end, true)
+}
+
 func (p *PebbleBackend) NewBatch() backend.Batch {
 	return &pebbleBatch{b: p.db.NewBatch(), db: p.db}
 }

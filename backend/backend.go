@@ -31,4 +31,5 @@ type Backend interface {
 	NewBatch() Batch
 	NewIterator(prefix []byte) Iterator
 	Close() error
+	Compact(dstPath string) error
 }
