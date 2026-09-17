@@ -116,3 +116,47 @@ func TestDB_Compact(t *testing.T) {
 		t.Fatalf("Compacted file size (%d) should be smaller than original (%d)", compactInfo.Size(), origInfo.Size())
 	}
 }
+
+func TestDB_OnlineCompact(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "online_compact_test.db")
+
+	db, err := qdb.Open(qdb.EngineBBolt, dbPath)
+	if err != nil {
+		t.Fatalf("Open DB failed: %v", err)
+	}
+	defer db.Close()
+
+	// 1. 写入大量数据并保留一条关键数据验证可用性
+	_ = db.HSet("users", []byte("keep_me"), []byte("important_value"))
+	for i := 0; i < 1000; i++ {
+		_ = db.HSet("users", []byte(fmt.Sprintf("temp_%d", i)), []byte("large_dummy_bytes_to_fill_pages"))
+	}
+
+	// 2. 批量删除数据，产生膨胀碎页面
+	for i := 0; i < 1000; i++ {
+		_, _ = db.HDel("users", []byte(fmt.Sprintf("temp_%d", i)))
+	}
+
+	beforeInfo, _ := os.Stat(dbPath)
+
+	// 3. 执行在线收缩与原位替换
+	if err := db.OnlineCompact(); err != nil {
+		t.Fatalf("OnlineCompact failed: %v", err)
+	}
+
+	afterInfo, _ := os.Stat(dbPath)
+
+	t.Logf("Before OnlineCompact size: %d bytes, After: %d bytes", beforeInfo.Size(), afterInfo.Size())
+
+	// 4. 验证体积变小
+	if afterInfo.Size() >= beforeInfo.Size() {
+		t.Fatalf("File size after OnlineCompact (%d) should be smaller than before (%d)", afterInfo.Size(), beforeInfo.Size())
+	}
+
+	// 5. 验证在原位替换后，数据库依然能正常读写，数据无丢失
+	val, err := db.HGet("users", []byte("keep_me"))
+	if err != nil || string(val) != "important_value" {
+		t.Fatalf("Data mismatch after OnlineCompact: got %s, err %v", val, err)
+	}
+}

@@ -42,3 +42,29 @@ func main() {
 
 	fmt.Println("\nQDB Operations Completed Successfully!")
 }
+
+func onlineCompact() {
+	db, err := qdb.Open(qdb.EngineBBolt, "./qdb_production.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	// 开启后台协程定时在线碎片整理
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		for range ticker.C {
+			log.Println("Starting scheduled online DB compaction...")
+			if err := db.OnlineCompact(); err != nil {
+				log.Printf("Online compact failed: %v", err)
+			} else {
+				log.Println("Online compact finished successfully.")
+			}
+		}
+	}()
+
+	// 业务正常读写，不受影响
+	_ = db.HSet("session", []byte("token"), []byte("abc"))
+	val, _ := db.HGet("session", []byte("token"))
+	fmt.Printf("Token: %s\n", val)
+}
